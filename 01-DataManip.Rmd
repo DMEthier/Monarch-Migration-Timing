@@ -1,0 +1,521 @@
+---
+title: "01-DataManip"
+author: "Danielle Ethier"
+date: "26/05/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Install required packages
+
+```{r installPackages, message = FALSE, warning = FALSE}
+
+require(naturecounts) #for accessing the monarch data
+require(RNCEP) #for accessing the weather data
+require(tidyverse)  
+require(lubridate)
+require(Hmisc) #to calculate the weighted sd
+#require(SDMTools) #This package is no longer avaiable to calculate weighted sd. 
+require(INLA) # to calculate the index value
+
+```
+
+## Monarch data access and exploration
+
+Fall migration counts of monarchs, collected at the Long Point Bird Observatory (LPBO), are submitted to NatureCounts annualy, and can be pulled directly in R using the naturecounts package. In order to do this, you will need to create a free account [https://www.birdscanada.org/birdmon/default/register.jsp] and make a request to the data custodian to release these data. 
+
+collections = "CMMN-LPBO-MOBU"	
+
+```{r MonarchData, message= FALSE, warning=FALSE}
+
+data<-nc_data_dl(collections="CMMN-LPBO-MOBU", username = "dethier", info ="Monarch data download for migration analysis: 2021")
+
+write.csv(data, "raw.monarch.data.csv") #save a local copy
+data<-read.csv("raw.monarch.data.csv" )#read local copy
+
+# Replace username. You will be prompted for your password.
+
+```
+
+Filter data from 1995-2020
+
+```{r FilterData}
+
+data<-data %>% select(SamplingEventIdentifier, SiteCode, survey_year, survey_month, survey_day, ObservationCount) %>% 
+  filter(survey_year >= 1995, survey_year <= 2020) %>% filter(SiteCode!="LPBO3") 
+
+data$ObservationCount<-as.integer(data$ObservationCount)
+
+data<-format_dates(data) #creates date and doy variable
+data<-data %>% filter(doy>200) #remove spring counts from 2003
+
+```
+
+Explore data from both LPBO sites, and LPBO sites combined to determine which is the best for the analysis
+
+##Zerofill matix for the Tip of LPBO
+Make a list of unique sampling dates based on the LPBO DET data to use for zero-filling  dataframe. We assume that is the Tip was operative that missing data are 'zero' rather than NA. 
+
+```{r zerofill}
+
+open<-nc_data_dl(collections="CMMN-DET-LPBO", years=c(1995, 2020), username = "dethier", info ="Create zerofill matrix for monarch migration analysis: 2021")
+
+#write.csv(open, "LPBO-DET-CMMN.csv")
+#open<-read.csv("LPBO-DET-CMMN.csv")
+
+#open<-open %>% filter(SiteCode=="LPBO1")
+open<-format_dates(open) #creates date and doy variable
+open<-open %>% filter(doy>200) #remove spring counts 
+
+event.data <- open %>%
+  filter(ObservationCount > 0) %>%
+  group_by(SamplingEventIdentifier, SiteCode, survey_year, survey_month, survey_day, date, doy) %>%
+  mutate(nspecies = n()) %>%
+  filter(nspecies > 1) %>% # assuming at least one individual detected each day. This could be modified, for example, to include only dates when at least 10 species were detected.
+  select(SamplingEventIdentifier, SiteCode, survey_year, survey_month, survey_day, date, doy) %>% 
+  distinct() %>%
+  ungroup() %>%
+  as.data.frame()
+
+# zerfill the data by merging event and real data.  
+
+data <- left_join(event.data, data, by = c("SamplingEventIdentifier", "SiteCode", "survey_year", "survey_month", "survey_day", "date", "doy")) %>%
+             mutate(
+               ObservationCount = replace(ObservationCount, is.na(ObservationCount), 0))
+ 
+
+```
+
+```{r LPBOSiteCompare}
+
+#Based on Moussus et al. 2010 the weighted mean doy should provide a robust estimate of yearly migration phenology
+
+LPBO1 <- data %>% 
+    filter (SiteCode =="LPBO1") %>%
+    select(-date) %>%  
+    dplyr::group_by(survey_year) %>%
+    dplyr::summarize (mean.date = weighted.mean(doy, ObservationCount), weighted.var=wtd.var(doy, ObservationCount), quant95 = quantile(doy, probs = 0.95)) %>%     mutate(weighted.sd=sqrt(weighted.var), sd.low = mean.date-weighted.sd, sd.high = mean.date+weighted.sd) 
+
+LPBO1['SiteCode']='LPBO1'
+
+
+#Plot weighted mean date of migration both sites combined
+ggplot(LPBO1, aes (x=survey_year, y=mean.date)) +
+  geom_point() +
+  geom_smooth() +
+  theme_classic()
+
+
+
+```
+
+Plot raw monarch counts at the Tip for visual inspection of migration peaks, weighted mean migration day and sd.
+
+```{r PlotRawCounts}
+
+data<-data %>% filter(SiteCode=="LPBO1") #just the TIP 
+
+
+#Historgram of observation counts are very zero inflated
+ggplot(data, aes(x=ObservationCount)) + 
+  geom_histogram(binwidth=.25, colour="black", fill="white")
+
+#Plot raw counts, each year seperate
+data1<-data %>% mutate(Obs1=ObservationCount+1)
+ggplot(data1, aes(x=doy, y=Obs1)) +  
+  geom_point() +
+  facet_wrap(survey_year~., scales="free") +
+  geom_vline(data = LPBO1, aes(xintercept = mean.date), color="red") +
+  geom_vline(data = LPBO1, aes(xintercept = quant95), color="blue") +
+  scale_x_continuous(limits = c(209, 317)) + 
+#  scale_y_log10(oob = scales::squish_infinite, limits = c(1,10000))+
+ scale_y_continuous(trans = 'log10', limits = c(1,10000))+
+  ylab("Raw Counts") +
+  xlab("Day of Year") +
+  theme_classic() 
+
+#Plot raw counts, pool all years
+ggplot(data, aes(x=doy, y=ObservationCount)) +
+  geom_point() +
+  ylab("Raw Counts") +
+  xlab("Day of Year") +
+  theme_classic() 
+
+#Plot weighted mean date of migration +-sd
+ggplot(LPBO1, aes (x=survey_year, y=mean.date)) +
+  geom_point() +
+  geom_ribbon(aes(ymin = sd.low, ymax = sd.high), alpha = 0.2)+
+  theme_classic()
+
+```
+
+## Weather data access
+
+Data come from the NCEP/NCAR Reanalysis (http://www.esrl.noaa.gov/psd/data/gridded/data.ncep.reanalysis.html) 
+and NCEP/DOE Reanalysis II (http://www.esrl.noaa.gov/psd/data/gridded/data.ncep.reanalysis2.html) datasets. 
+
+Note that variables on a T62 Gaussian grid are evenly spaced in longitude but unevenly spaced in latitude. All data are downloaded on the gaussian grid for compariative purposes. 
+  
+Date range 1995-2020
+Month range July-October (7,10)
+Lat Long coordinates cover the Great Lakes Shoreline associated with MOBU counts from Long Point and surrounding area
+
+Zipf 2017: Total Monthly Precipitation, Average Monthly Temperature. 
+
+Bounding box: northeast Ottawa to tip of the Bruce in the northwest, down to LPBO in the south 
+
+#Air temp monthly average RNCEP
+```{r temp}
+
+#Import saved summary data
+#air_temp_summary<-read.csv("Mean.Monthly.Temp.csv")
+
+air_temp <- NCEP.gather(variable = 'air.2m', level = 'gaussian', months.minmax = c(6, 10), years.minmax = c(1995,2020), lat.southnorth = c(42.50, 45.40), lon.westeast = c(-81.65, -75.69), return.units = TRUE)
+
+#Calculate the mean air temperature on a given day. 
+air_temp_mean <- NCEP.aggregate(wx.data=air_temp, HOURS=FALSE, fxn='mean')
+
+#Change data from an array into a dateframe
+air_temp_mean <- NCEP.array2df(air_temp_mean, var.names=NULL)
+
+#Change temperature into degree C and create year, month, day columns
+air_temp_summary <- air_temp_mean %>%
+         mutate(air_temp_mean = variable1 - 273,
+         longitude = longitude - 360,  
+         datetime = ymd(gsub("[_XX]", "", datetime)),
+         year = year(datetime),
+         month = month(datetime),
+         day = mday(datetime),
+         month_year = paste(year,month)) %>%
+         select(-datetime, -variable1) %>%
+         group_by(month_year) %>%
+         dplyr::summarize(air_temp_mean=mean(air_temp_mean)) %>%
+	       separate(month_year, into=c("Year", "month"), sep=" ") %>%
+         pivot_wider(names_from = month, values_from = air_temp_mean) %>%
+         rename(June_temp = "6", July_temp = "7", August_temp = "8", September_temp = "9", October_temp = "10") %>%
+         mutate(Year=as.numeric(Year)) %>% 
+         mutate (Summer_temp = rowMeans(select(., 3:5))) #average summer temp June-Aug
+
+air_temp_summary_vis <- air_temp_mean %>%
+         mutate(air_temp_mean = variable1 - 273,
+         longitude = longitude - 360,  
+         datetime = ymd(gsub("[_XX]", "", datetime)),
+         year = year(datetime),
+         month = month(datetime),
+         day = mday(datetime),
+         month_year = paste(year,month)) %>%
+         select(-datetime, -variable1) %>%
+         group_by(month_year) %>%
+         dplyr::summarize(air_temp_mean=mean(air_temp_mean)) %>%
+	 separate(month_year, into=c("year", "month"), sep=" ") %>%
+         mutate(year = as.numeric(year), month = as.numeric(month))
+
+ggplot(air_temp_summary_vis, aes(x=year, y=air_temp_mean)) +
+  geom_point() +
+  geom_smooth() +
+  theme_classic() +
+  facet_wrap(month ~., scales="free")
+
+#save temperature data
+write.csv(air_temp_summary,"Mean.Monthly.Temp.csv")
+
+```  
+
+
+#Total (sum) monthly precipitation RNCEP
+```{r precipitation}
+
+#Import saved summary data
+#precip_summary<-read.csv("Sum.Monthly.Precip.csv")
+
+precip <- NCEP.gather(variable = 'prate.sfc', level = 'gaussian', months.minmax = c(6, 10), years.minmax = c(1995,2020), lat.southnorth = c(42.50, 45.40), lon.westeast = c(-81.65, -75.69), return.units = TRUE)
+
+precip_sum<- NCEP.aggregate(wx.data=precip, HOURS=FALSE, fxn='sum')
+
+precip_sum <- NCEP.array2df(precip_sum, var.names=NULL)
+
+precip_summary <- precip_sum %>%
+         mutate(precip_mean = variable1,
+         longitude = longitude - 360,  
+         datetime = ymd(gsub("[_XX]", "", datetime)),
+         year = year(datetime),
+         month = month(datetime),
+         day = mday(datetime),
+         month_year = paste(year,month)) %>%
+         select(-datetime, -variable1) %>%
+         group_by(month_year) %>%
+         dplyr::summarize(precip_mean=mean(precip_mean)) %>%
+	 separate(month_year, into=c("Year", "month"), sep=" ") %>%
+         pivot_wider(names_from = month, values_from = precip_mean) %>%
+         rename(June_precip = "6", July_precip = "7", August_precip = "8", September_precip = "9", October_precip = "10") %>%
+         mutate(Year = as.numeric(Year)) %>% 
+         mutate (Summer_precip = rowMeans(select(., 3:5))) #average summer precip June-Aug
+
+precip_summary_vis <- precip_sum %>%
+         mutate(precip_mean = variable1,
+         longitude = longitude - 360,  
+         datetime = ymd(gsub("[_XX]", "", datetime)),
+         year = year(datetime),
+         month = month(datetime),
+         day = mday(datetime),
+         month_year = paste(year,month)) %>%
+         select(-datetime, -variable1) %>%
+         group_by(month_year) %>%
+         dplyr::summarize(precip_mean=mean(precip_mean)) %>%
+	 separate(month_year, into=c("year", "month"), sep=" ") %>%
+         mutate(year = as.numeric(year), month = as.numeric(month))
+
+
+ggplot(precip_summary_vis, aes(x=year, y=precip_mean)) +
+  geom_point() +
+  geom_smooth() +
+  theme_classic() +
+  facet_wrap(month ~., scales="free")
+
+
+#save precipitation data
+write.csv(precip_summary,"Sum.Monthly.Precip.csv")
+
+```
+
+
+##Combine weather covariates into one table
+
+```{r combine weather}
+
+cov<-merge(air_temp_summary, precip_summary, by=c("Year"))
+
+```
+
+##Calcualte the annual index of abundance as a covariate using methods developed in Ethier et al. 2020. First need to pull environmental covariates specific to the tip. Therefore I changes the lat long relative to the previous pull.
+
+```{r index of abundance}
+
+#Max temp
+air_temp_trend <- NCEP.gather(variable = 'air.2m', level = 'gaussian', months.minmax = c(6, 10), years.minmax = c(1995,2020), lat.southnorth = c(42.54, 42.54), lon.westeast = c(-80.05, -80.05),return.units = TRUE)
+
+#Calculate the maximum air temperature on a given day. 
+air_temp_max_trend <- NCEP.aggregate(wx.data=air_temp_trend, HOURS=FALSE, fxn='max')
+#Change data from an array into a dateframe
+air_temp_max_trend <- NCEP.array2df(air_temp_max_trend, var.names=NULL)
+#Change temperature into degree C and create year, month, day columns
+air_temp_sum_trend <- air_temp_max_trend %>%
+  mutate(maxTemp = variable1 - 273,
+         longitude = longitude - 360,  
+         datetime = ymd(gsub("[_XX]", "", datetime)),
+         year = year(datetime),
+         month = month(datetime),
+         day = mday(datetime)) %>% 
+        select(-datetime, -variable1)
+#select the correct cell
+air_temp_sum_trend<-air_temp_sum_trend %>% filter(latitude == 42.8564, longitude ==	-80.625)
+
+##Wind Data
+air_uwind <- NCEP.gather(variable = 'uwnd.10m', level = 'gaussian', months.minmax = c(6, 10), years.minmax = c(1995,2020), lat.southnorth = c(42.54, 42.54), lon.westeast = c(-80.05, -80.05),return.units = TRUE)
+air_vwind <- NCEP.gather(variable = 'vwnd.10m', level = 'gaussian', months.minmax = c(6, 10), years.minmax = c(1995,2020), lat.southnorth = c(42.54, 42.54), lon.westeast = c(-80.05, -80.05), return.units = TRUE)
+#Calculate the mean windspeed on a given day
+air_uwind_ave <- NCEP.aggregate(wx.data=air_uwind, HOURS=FALSE, fxn='mean')
+air_vwind_ave <- NCEP.aggregate(wx.data=air_vwind, HOURS=FALSE, fxn='mean')
+#Change data from an array into a dateframe
+air_uwind_ave <- NCEP.array2df(air_uwind_ave, var.names=NULL)
+air_vwind_ave <- NCEP.array2df(air_vwind_ave, var.names=NULL)
+#Create year, month, day columns and rename variable1
+air_uwind_sum <- air_uwind_ave %>%
+  mutate(uwind = variable1,
+         longitude = longitude - 360,  
+         datetime = ymd(gsub("[_XX]", "", datetime)),
+         year = year(datetime),
+         month = month(datetime),
+         day = mday(datetime)) %>%
+  select(-datetime, -variable1)
+#select the correct cell
+air_uwind_sum<-air_uwind_sum %>% filter(latitude == 42.8564, longitude ==	-80.625)
+air_vwind_sum <- air_vwind_ave %>%
+  mutate(vwind = variable1,
+         longitude = longitude - 360,  
+         datetime = ymd(gsub("[_XX]", "", datetime)),
+         year = year(datetime),
+         month = month(datetime),
+         day = mday(datetime)) %>%
+  select(-datetime, -variable1)
+#select the correct cell
+air_vwind_sum<-air_vwind_sum %>% filter(latitude == 42.8564, longitude ==	-80.625)
+
+##Cloud Data
+TotCloud <- NCEP.gather(variable = 'tcdc.eatm', level = 'gaussian', months.minmax = c(6, 10), years.minmax = c(1995,2020), lat.southnorth = c(42.54, 42.54), lon.westeast = c(-80.05, -80.05),return.units = TRUE)
+#Calculate the mean cloud cover on a given day
+TotCloud_ave <- NCEP.aggregate(wx.data=TotCloud, HOURS=FALSE, fxn='mean')
+#Change data from an array into a dateframe
+TotCloud_ave <- NCEP.array2df(TotCloud_ave, var.names=NULL)
+#Create year, month, day columns and rename variable1
+TotCloud_sum <- TotCloud_ave %>%
+  mutate(cloud = variable1,
+         longitude = longitude - 360,  
+         datetime = ymd(gsub("[_XX]", "", datetime)),
+         year = year(datetime),
+         month = month(datetime),
+         day = mday(datetime)) %>%
+  select(-datetime, -variable1)
+#select the correct cell
+TotCloud_sum<-TotCloud_sum %>% filter(latitude == 42.8564, longitude ==	-80.625)
+
+##Merge all weather covariates based on lat, long, day, month, year
+test<-left_join(air_uwind_sum, air_vwind_sum, by=c("latitude", "longitude", "year", "month", "day"))
+test<-left_join(test, air_temp_sum_trend, by=c("latitude", "longitude", "year", "month", "day"))
+test<-left_join(test, TotCloud_sum, by=c("latitude", "longitude", "year", "month", "day"))
+
+#select desired columns
+weather<-test %>% select(year, month, day, uwind, vwind, cloud, maxTemp)
+
+weather<-weather %>% mutate(survey_year=as.character(year), survey_month=as.character(month), survey_day=as.character(day)) %>% select(-year, -month, -day)
+
+data$survey_year<-as.character(data$survey_year)
+data$survey_month<-as.character(data$survey_month)
+data$survey_day<-as.character(data$survey_day)
+
+#combine with daily count data
+trends<-left_join(data, weather, by=c("survey_year", "survey_month", "survey_day"))
+
+#shouldn't have changed these previously. Just being lazy. This should be reversed previously. 
+trends$survey_year<-as.numeric(data$survey_year)
+trends$survey_month<-as.numeric(data$survey_month)
+trends$survey_day<-as.numeric(data$survey_day)
+
+
+counts <- trends %>%
+  dplyr::mutate (mean.yr = sum(min(survey_year) + max(survey_year))/2,
+	       cyear = survey_year - mean.yr,
+	       yearfac = as.factor(cyear),
+	       fyear = as.factor(survey_year),
+	       mean.doy = sum(min(doy) + max(doy))/2,
+	       doyfac = as.factor(doy - mean.doy)) %>%
+  select(-mean.yr, -mean.doy)
+
+
+#The analysis seems to disaprrove of some of the factors. I think this is a problem for the random effects. Therefore, change these factors to numberic using the unclass function. 
+counts$yearfac<-unclass(counts$yearfac)
+counts$doyfac<-unclass(counts$doyfac)
+
+#remove NA
+counts<-na.omit(counts)
+
+#create the legendre polynomial transformation
+  poly.legendre <- function(x, degree, minx, maxx){
+ 
+	if (min(x) < minx) stop("min(x) < minx")
+	if (max(x) > maxx) stop("max(x) > maxx")
+
+	if (degree > 4) stop("Degree must be < 5")
+ 
+	lg <- length(x)
+ 
+	z <- data.frame(x)
+ 
+	z$xP1 <- 2 * (x - minx) / (maxx - minx) - 1
+	z$xP2 <- (3 * z$xP1 * z$xP1 - 1) / 2
+	if(degree > 2) z$xP3 <- (5 * z$xP2 * z$xP1 - 2 * z$xP1) / 3
+	if(degree > 3) z$xP4 <- (7 * z$xP3 * z$xP1 - 3 * z$xP2) / 4
+ 
+	z  <- z[, -1]
+}
+
+#legendre tranformation to make polynomials uncorrelated (counts)	
+tmp1 <- poly.legendre(counts$doy, 2, min(counts$doy), max(counts$doy))
+ names(tmp1) <- c("doy1", "doy2")
+ 
+tmp2<- poly.legendre(counts$maxTemp, 2, min(counts$maxTemp), max(counts$maxTemp))
+ names(tmp2) <- c("temp1", "temp2") 
+
+tmp3<- poly.legendre(counts$uwind, 2, min(counts$uwind), max(counts$uwind))
+ names(tmp3) <- c("EV1", "EV2") 
+ 
+tmp4<- poly.legendre(counts$vwind, 2, min(counts$vwind), max(counts$vwind))
+ names(tmp4) <- c("SV1", "SV2")  
+ 
+counts <- cbind(counts, tmp1, tmp2, tmp3, tmp4)
+
+#write.csv(trends, "Trend.data.2021csv")
+#trends<-read.csv("Trend.data.2021.csv")
+
+# BASE MODEL Tip LPBO
+LPBO.formula <- ObservationCount ~ cyear + cloud + doy1 + doy2 + EV1 + EV2 + SV1 + SV2 + temp1 + temp2 + f(yearfac, model = "ar1") + f(doyfac, model = "ar1")
+
+LPBO.Trend = inla(LPBO.formula, family = "poisson", data = counts,  
+control.predictor = list(compute = TRUE),
+control.compute = list(config = TRUE, dic=TRUE))
+ 
+summary(LPBO.Trend)
+
+# Calculate posterior probability that trend is negative
+
+  post_year_LPBO <- LPBO.Trend$marginals.fixed$cyear
+  sample <- inla.rmarginal(10000, post_year_LPBO)
+  post_prob_LPBO <- length(sample[sample < 0])/length(sample) 
+
+# Output Results
+
+  LPBO.out <- as.data.frame(t(summary(LPBO.Trend)$fixed["cyear",])) #output summary of the fixed effects of the model
+  names(LPBO.out) <- c("mean", "sd", "lcl", "mid", "ucl", "mode", "kld")
+  LPBO.out$trnd <- 100*(exp(LPBO.out$mean)-1)
+  LPBO.out$lower_ci <- 100*(exp(LPBO.out$lcl)-1)
+  LPBO.out$upper_ci <- 100*(exp(LPBO.out$ucl)-1)
+  LPBO.out$post_prob_LPBO <- round(ifelse(LPBO.out$trnd <= 0, post_prob_LPBO, 1-post_prob_LPBO), digits = 2)
+
+LPBO.out <- subset(LPBO.out, select = -c(1:7))
+names(LPBO.out) <- c("trnd", "lower_ci_trend", "upper_ci_trend", "post_prob") 
+  
+# Calculate abundance indices using the trend model
+
+   nyears <- length(unique(counts$cyear))
+   tmpA <- subset(counts, select = c("survey_year", "ObservationCount"))
+   tmpA$pred.log <-LPBO.Trend$summary.fitted.values["mean"]$mean
+  
+   library(plyr) 
+   pred.se <- ddply (tmpA, .(survey_year), summarize, 
+                        pred.count= mean(pred.log),
+                        sd.count = sd(pred.log), 
+                        n.count = length(pred.log))
+             
+# Calculate the standard error  
+  pred.se$sem.count<-pred.se$sd.count/pred.se$n.count^0.5
+     
+  LPBO.plot <- as.data.frame(pred.se)
+  names(LPBO.plot) <- c("year", "index", "sd.index", "n.count", "se.index")
+  LPBO.plot$LCI <- LPBO.plot$index-LPBO.plot$se.index
+  LPBO.plot$UCI <- LPBO.plot$index+LPBO.plot$se.index
+  LPBO.plot$trend <-LPBO.out[,1]
+  LPBO.plot$lower_ci_trend <- LPBO.out[,2]
+  LPBO.plot$upper_ci_trend <- LPBO.out[,3]
+  LPBO.plot$post_prob <- LPBO.out[,4]
+  
+#Output tables
+#write.csv(LPBO.plot, "LPBO.plot.full.csv" )
+
+ggplot(data = LPBO.plot) +
+	geom_pointrange(aes(x = year, y = index, ymin = LCI, ymax = UCI), size = 1.0, pch = 20) +
+	geom_smooth(aes(x = year, y = index, min = LCI, max = UCI), col = "black", method = "lm") + 
+	theme_classic() +
+	xlab("") +
+	ylab("") +
+  scale_x_continuous(breaks = seq(from = 1995, to = 2020, by = 1)) +
+	theme(text = element_text(size=26),axis.text.x = element_text(angle = 90, hjust = 2))
+
+index<-LPBO.plot %>% select(year, index)
+
+```
+
+
+##Combine weather covariates and annual index of abundance with monarch response table
+
+```{r combine response}
+
+dat<-merge(LPBO1, cov, by.x="survey_year", by.y="Year")
+dat<-merge(dat, index, by.x="survey_year", by.y="year")
+
+write.csv(dat, "Monarch.data.2021.csv")
+
+```
+
