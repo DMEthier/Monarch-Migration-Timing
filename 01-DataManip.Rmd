@@ -20,6 +20,7 @@ require(lubridate)
 require(Hmisc) #to calculate the weighted sd
 #require(SDMTools) #This package is no longer avaiable to calculate weighted sd. 
 require(INLA) # to calculate the index value
+detach("package:plyr", unload=TRUE)
 
 ```
 
@@ -31,16 +32,16 @@ collections = "CMMN-LPBO-MOBU"
 
 ```{r MonarchData, message= FALSE, warning=FALSE}
 
-data<-nc_data_dl(collections="CMMN-LPBO-MOBU", username = "dethier", info ="Monarch data download for migration analysis: 2021")
-
-write.csv(data, "raw.monarch.data.csv") #save a local copy
-data<-read.csv("raw.monarch.data.csv" )#read local copy
+#data<-nc_data_dl(collections="CMMN-LPBO-MOBU", username = "dethier", info ="Monarch data download for migration analysis: 2021")
 
 # Replace username. You will be prompted for your password.
 
+#write.csv(data, "raw.monarch.data.csv") #save a local copy
+data<-read.csv("raw.monarch.data.csv" )#read local copy
+
 ```
 
-Filter data from 1995-2020
+##Filter data from 1995-2020
 
 ```{r FilterData}
 
@@ -61,14 +62,14 @@ Make a list of unique sampling dates based on the LPBO DET data to use for zero-
 
 ```{r zerofill}
 
-open<-nc_data_dl(collections="CMMN-DET-LPBO", years=c(1995, 2020), username = "dethier", info ="Create zerofill matrix for monarch migration analysis: 2021")
+#open<-nc_data_dl(collections="CMMN-DET-LPBO", years=c(1995, 2020), username = "dethier", info ="Create zerofill matrix for monarch migration analysis: 2021")
 
 #write.csv(open, "LPBO-DET-CMMN.csv")
-#open<-read.csv("LPBO-DET-CMMN.csv")
+open<-read.csv("LPBO-DET-CMMN.csv")
 
-#open<-open %>% filter(SiteCode=="LPBO1")
+open<-open %>% filter(SurveyAreaIdentifier=="LPBO1")
 open<-format_dates(open) #creates date and doy variable
-open<-open %>% filter(doy>200) #remove spring counts 
+open<-open %>% filter(doy>213) #remove spring counts 
 
 event.data <- open %>%
   filter(ObservationCount > 0) %>%
@@ -85,7 +86,60 @@ event.data <- open %>%
 data <- left_join(event.data, data, by = c("SamplingEventIdentifier", "SiteCode", "survey_year", "survey_month", "survey_day", "date", "doy")) %>%
              mutate(
                ObservationCount = replace(ObservationCount, is.na(ObservationCount), 0))
- 
+
+#Plot raw counts, each year seperate
+data0<-data %>% mutate(Obs1=ObservationCount+1)
+ggplot(data0, aes(x=doy, y=Obs1)) +  
+  geom_point() +
+  facet_wrap(survey_year~., scales="free") +
+  scale_y_continuous(trans = 'log10', limits = c(1,10000))+
+  ylab("Raw Counts (log)") +
+  xlab("Day of Year") +
+  theme_classic() 
+
+
+```
+
+##Manually filter end of season flight to last flight date based on visual inspections of plot/data prior to generating summary stats. Long zero counts at the tails make the 90th percentile a useless statistic.
+
+```{r endflight}
+
+data<-data %>% filter(!(survey_year==1995 & doy>=292)) %>%
+  filter(!(survey_year==1996 & doy>=296)) %>% 
+  filter(!(survey_year==1997 & doy>=295)) %>%
+  filter(!(survey_year==1998 & doy>=301)) %>% 
+  filter(!(survey_year==1999 & doy>=305)) %>% 
+  filter(!(survey_year==2000 & doy>=307)) %>%
+  filter(!(survey_year==2001 & doy>=293)) %>% 
+  filter(!(survey_year==2002 & doy>=304)) %>%
+  filter(!(survey_year==2003 & doy>=304)) %>%
+  filter(!(survey_year==2004 & doy>=298)) %>% 
+  filter(!(survey_year==2005 & doy>=306)) %>%
+  filter(!(survey_year==2006 & doy>=292)) %>%
+  filter(!(survey_year==2007 & doy>=307)) %>%
+  filter(!(survey_year==2008 & doy>=289)) %>%
+  filter(!(survey_year==2009 & doy>=302)) %>%
+  filter(!(survey_year==2010 & doy>=285)) %>%
+  filter(!(survey_year==2011 & doy>=311)) %>%
+  filter(!(survey_year==2012 & doy>=299)) %>%
+  filter(!(survey_year==2013 & doy>=297)) %>%
+  filter(!(survey_year==2014 & doy>=277)) %>%
+  filter(!(survey_year==2015 & doy>=313)) %>% 
+  filter(!(survey_year==2016 & doy>=290)) %>%
+  filter(!(survey_year==2017 & doy>=307)) %>%
+  filter(!(survey_year==2018 & doy>=312)) %>%
+  filter(!(survey_year==2019 & doy>=297)) %>%
+  filter(!(survey_year==2020 & doy>=284))  
+  
+#Plot raw counts, each year seperate
+data0<-data %>% mutate(Obs1=ObservationCount+1)
+ggplot(data0, aes(x=doy, y=Obs1)) +  
+  geom_point() +
+  facet_wrap(survey_year~., scales="free") +
+  scale_y_continuous(trans = 'log10', limits = c(1,10000))+
+  ylab("Raw Counts (log)") +
+  xlab("Day of Year") +
+  theme_classic() 
 
 ```
 
@@ -97,10 +151,9 @@ LPBO1 <- data %>%
     filter (SiteCode =="LPBO1") %>%
     select(-date) %>%  
     dplyr::group_by(survey_year) %>%
-    dplyr::summarize (mean.date = weighted.mean(doy, ObservationCount), weighted.var=wtd.var(doy, ObservationCount), quant95 = quantile(doy, probs = 0.95)) %>%     mutate(weighted.sd=sqrt(weighted.var), sd.low = mean.date-weighted.sd, sd.high = mean.date+weighted.sd) 
+    dplyr::summarize (mean.date = weighted.mean(doy, ObservationCount), weighted.var=wtd.var(doy, ObservationCount), quant90 = quantile(doy, probs = 0.90)) %>%     mutate(weighted.sd=sqrt(weighted.var), sd.low = mean.date-weighted.sd, sd.high = mean.date+weighted.sd) 
 
 LPBO1['SiteCode']='LPBO1'
-
 
 #Plot weighted mean date of migration both sites combined
 ggplot(LPBO1, aes (x=survey_year, y=mean.date)) +
@@ -108,7 +161,17 @@ ggplot(LPBO1, aes (x=survey_year, y=mean.date)) +
   geom_smooth() +
   theme_classic()
 
+#Plot weighted.sd date of migration both sites combined
+ggplot(LPBO1, aes (x=survey_year, y=weighted.sd)) +
+  geom_point() +
+  geom_smooth() +
+  theme_classic()
 
+#Plot 90 quant date of migration both sites combined
+ggplot(LPBO1, aes (x=survey_year, y=quant90)) +
+  geom_point() +
+  geom_smooth() +
+  theme_classic()
 
 ```
 
@@ -129,11 +192,11 @@ ggplot(data1, aes(x=doy, y=Obs1)) +
   geom_point() +
   facet_wrap(survey_year~., scales="free") +
   geom_vline(data = LPBO1, aes(xintercept = mean.date), color="red") +
-  geom_vline(data = LPBO1, aes(xintercept = quant95), color="blue") +
+  geom_vline(data = LPBO1, aes(xintercept = quant90), color="blue") +
   scale_x_continuous(limits = c(209, 317)) + 
 #  scale_y_log10(oob = scales::squish_infinite, limits = c(1,10000))+
  scale_y_continuous(trans = 'log10', limits = c(1,10000))+
-  ylab("Raw Counts") +
+  ylab("Raw Counts (log scale)") +
   xlab("Day of Year") +
   theme_classic() 
 
@@ -221,6 +284,7 @@ ggplot(air_temp_summary_vis, aes(x=year, y=air_temp_mean)) +
 
 #save temperature data
 write.csv(air_temp_summary,"Mean.Monthly.Temp.csv")
+air_temp_summary<-read.csv("Mean.Monthly.Temp.csv")
 
 ```  
 
@@ -278,7 +342,7 @@ ggplot(precip_summary_vis, aes(x=year, y=precip_mean)) +
 
 #save precipitation data
 write.csv(precip_summary,"Sum.Monthly.Precip.csv")
-
+precip_summary <-read.csv("Sum.Monthly.Precip.csv")
 ```
 
 
@@ -493,7 +557,8 @@ names(LPBO.out) <- c("trnd", "lower_ci_trend", "upper_ci_trend", "post_prob")
   
 #Output tables
 #write.csv(LPBO.plot, "LPBO.plot.full.csv" )
-
+#LPBO.plot<-read.csv("LPBO.plot.full.csv")
+ 
 ggplot(data = LPBO.plot) +
 	geom_pointrange(aes(x = year, y = index, ymin = LCI, ymax = UCI), size = 1.0, pch = 20) +
 	geom_smooth(aes(x = year, y = index, min = LCI, max = UCI), col = "black", method = "lm") + 
@@ -504,6 +569,9 @@ ggplot(data = LPBO.plot) +
 	theme(text = element_text(size=26),axis.text.x = element_text(angle = 90, hjust = 2))
 
 index<-LPBO.plot %>% select(year, index)
+
+write.csv(index, "IndexAbundance.csv")
+index<-read.csv("IndexAbundance.csv")
 
 ```
 

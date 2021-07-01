@@ -1,0 +1,162 @@
+---
+title: "02-DataAnalysis"
+author: "Danielle Ethier"
+date: "22/06/2021"
+output: html_document
+---
+
+##Monarch fall migration analysis 2021. This script is written to be stand alone from the 01-DataManip script, which is used for data download and cleaning. 
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Install required packages
+
+```{r installPackages}
+
+require(tidyverse)  
+require(psych)
+require(mgcv)
+require(lmtest)
+
+detach("package:plyr", unload=TRUE) #if this was previously loaded it will cause a headache. 
+ 
+```
+
+##Import data
+
+```{r import data}
+
+dat<-read.csv("Monarch.data.2021.csv")
+
+dat<-dat %>% select(survey_year, mean.date, weighted.sd, quant90, June_temp, July_temp, August_temp, September_temp, October_temp, Summer_temp, June_precip, July_precip, August_precip, September_precip, October_precip, Summer_precip, index)
+
+```
+
+##Peason correlation of response and predictor variables
+```{r corr}
+
+corr_response <- dat[, 2:4]
+# Plot correlation matrix
+pairs(corr_response)
+cor(corr_response)
+psych::pairs.panels(corr_response)
+
+corr_predict <- dat[, 5:17]
+# Plot correlation matrix
+pairs(corr_predict)
+cor(corr_predict)
+psych::pairs.panels(corr_predict)
+
+cor.test(dat$Summer_temp, dat$June_temp)
+cor.test(dat$Summer_temp, dat$July_temp)
+cor.test(dat$Summer_temp, dat$August_temp)
+
+#Average summer temperature correlation with June, July, and August temps. Therefore it will be removed from the anlysis
+#dat<-dat %>% select(-Summer_temp)
+
+```
+
+##Explore the distribution of the response varaible to know what model distribution is more appropraite
+```{r response distribution}
+
+hist(dat$mean.date)
+hist(dat$weighted.sd)
+hist(dat$quant90)
+
+#These are all close enough to normally distributed to use a linear model 
+
+```
+
+##Global models developed testing significant of predictors
+
+```{r Globalmodels}
+
+modelG<- lm(mean.date ~ Summer_temp+September_temp+October_temp+September_precip+October_precip+Summer_precip+index+survey_year, data=dat)
+summary(modelG)
+plot(modelG)
+
+modelG1<- lm(weighted.sd ~ Summer_temp+September_temp+October_temp+September_precip+October_precip+Summer_precip+index+survey_year, data=dat)
+summary(modelG1)
+plot(modelG1)
+
+modelG2<- lm(quant90 ~ Summer_temp+September_temp+October_temp+September_precip+October_precip+Summer_precip+index+survey_year, data=dat)
+summary(modelG2)
+plot(modelG2)
+
+```
+
+```{r analysis Tredennick et al. 2021}
+
+mean<-dat %>% select(-weighted.sd, -quant90)
+pairs(mean)
+cor(mean)
+psych::pairs.panels(mean)
+#October temp was correlated > 0.3, this is consistent with the global model above. 
+
+#Weighted Means
+mean_full<-lm(mean.date~October_temp + survey_year, data=mean)
+summary(mean_full)#lm + year not significant
+plot(mean_full)
+drop1(mean_full, test="Chisq")
+
+#to look at autocorrelation in residuals
+res = mean_full$res 
+n = length(res) 
+mod2 = lm(res[-n] ~ res[-1]) 
+summary(mod2) #there is no significant temporal autocorrelations
+
+#Weighted SD
+sd<-dat %>% select(-mean.date, -quant90)
+pairs(sd)
+cor(sd)
+psych::pairs.panels(sd)
+#June temp, August precip, summer precip, index were correlated > 0.3, only index was identified in the global model
+
+sd_full<-lm(weighted.sd~June_temp+August_precip+Summer_precip+index+survey_year, data=sd)
+summary(sd_full)
+plot(sd_full)
+drop1(sd_full, test="Chisq") #Index significant
+
+#90th percentile
+p90<-dat %>% select(-mean.date, -weighted.sd)
+pairs(p90)
+cor(p90)
+psych::pairs.panels(p90)
+#September temp was correlated > 0.3, this is consistent with the global model
+
+p90_full<-lm(quant90~September_temp+survey_year, data=p90)
+summary(p90_full) #September temp significant
+plot(p90_model1)
+
+drop1(p90_full, test="Chisq")
+
+#look at autocorrelation in residuals
+res = p90_model3$res 
+n = length(res) 
+mod2 = lm(res[-n] ~ res[-1]) 
+summary(mod2) #there is no significant temporal autocorrelations
+
+#plot significant results (SD)
+sd_index<-gam(weighted.sd~index, data=sd)
+summary(sd_index)
+ggplot(sd, aes (x=index, y=weighted.sd)) +
+  geom_point() +
+  geom_smooth(method ="lm") + 
+  ylab("Varitation passage (weighted sd)") +
+  xlab("September temperature (C)") +
+  theme_classic()
+
+#plot significant results (quant90)
+p90_sep<-gam(quant90~September_temp, data=p90)
+summary(p90_sep)
+ggplot(p90, aes (x=September_temp, y=quant90)) +
+  geom_point() +
+  geom_smooth(method ="lm") + 
+  ylab("Last passage period (90th quantile)") +
+  xlab("September temperature (C)") +
+  theme_classic()
+
+
+```
