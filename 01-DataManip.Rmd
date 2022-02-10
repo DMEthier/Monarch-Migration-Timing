@@ -499,7 +499,6 @@ cov<-merge(cov, air_min_summary, by=c("Year"))
 
 ```
 
-
 ##Combine weather covariates and annual index of abundance with monarch response table
 
 ```{r combine response}
