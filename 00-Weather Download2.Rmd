@@ -1,0 +1,159 @@
+---
+title: "00-Weather v2"
+author: "Danielle Ethier"
+date: "26/05/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Install required packages
+
+```{r installPackages, message = FALSE, warning = FALSE}
+
+require(tidyverse)
+require(RNCEP) #for accessing the weather data
+require(climwin)
+require(lubridate)
+require(pollen) #calculate growing degree days (gdd)
+
+```
+
+## Weather data access
+
+Data come from the NCEP/NCAR Reanalysis (http://www.esrl.noaa.gov/psd/data/gridded/data.ncep.reanalysis.html) 
+and NCEP/DOE Reanalysis II (http://www.esrl.noaa.gov/psd/data/gridded/data.ncep.reanalysis2.html) datasets. 
+
+Note that variables on a T62 Gaussian grid are evenly spaced in longitude but unevenly spaced in latitude. All data are downloaded on the gaussian grid for compariative purposes. 
+  
+Date range 1995-2020
+Month range July-October (7,10)
+Lat Long coordinates cover the Great Lakes Shoreline associated with MOBU counts from Long Point and surrounding area
+
+Zipf 2017: Total Monthly Precipitation, Average Monthly Temperature, Average min daily temp 
+
+Bounding box: northeast Ottawa to tip of the Bruce in the northwest, down to LPBO in the south 
+
+#Air temp daily mean
+```{r tempmin}
+
+air <- NCEP.gather(variable = 'tmin.2m', level = 'gaussian', months.minmax = c(6, 10), years.minmax = c(1995,2020), lat.southnorth = c(42.50, 45.40), lon.westeast = c(-81.65, -75.69), return.units = TRUE)
+
+#Calculate the mean min air temperature on a given day. 
+air_mean <- NCEP.aggregate(wx.data=air, HOURS=FALSE, fxn='mean')
+
+#Change data from an array into a dateframe
+air_mean <- NCEP.array2df(air_mean, var.names=NULL)
+
+air_mean <- air_mean %>%
+         mutate(air_mean = variable1 - 273,
+         longitude = longitude - 360,  
+         datetime = ymd(gsub("[_XX]", "", datetime))) %>% 
+         group_by(datetime) %>%
+         dplyr::summarize(air_mean=mean(air_mean))
+
+air_mean$date <- format(air_mean$datetime, format="%d/%m/%Y")
+air_mean$date<-as.factor(air_mean$date)
+
+write.csv(air_mean, "Daily mean air temp.csv")
+```  
+
+#Air temp daily min
+```{r tempmin}
+
+#Calculate the mean min air temperature on a given day. 
+air_min <- NCEP.aggregate(wx.data=air, HOURS=FALSE, fxn='min')
+
+#Change data from an array into a dateframe
+air_min <- NCEP.array2df(air_min, var.names=NULL)
+
+air_min_mean <- air_min %>%
+         mutate(min_temp = variable1 - 273,
+         longitude = longitude - 360,  
+         datetime = ymd(gsub("[_XX]", "", datetime)))%>% 
+         select(-variable1) %>% 
+         group_by(datetime) %>%
+         dplyr::summarize(air_min=mean(min_temp))
+
+air_min_mean$date <- format(air_min_mean$datetime, format="%d/%m/%Y")
+air_min_mean$date<-as.factor(air_min_mean$date)
+
+write.csv(air_min_mean, "Daily min air temp.csv")
+``` 
+
+#Air temp daily max
+```{r tempmin}
+
+#Calculate the mean min air temperature on a given day. 
+air_max <- NCEP.aggregate(wx.data=air, HOURS=FALSE, fxn='max')
+
+#Change data from an array into a dateframe
+air_max <- NCEP.array2df(air_max, var.names=NULL)
+
+air_max_mean <- air_max %>%
+         mutate(max_temp = variable1 - 273,
+         longitude = longitude - 360,  
+         datetime = ymd(gsub("[_XX]", "", datetime)))%>% 
+         select(-variable1) %>% 
+         group_by(datetime) %>%
+         dplyr::summarize(air_max=mean(max_temp))
+
+air_max_mean$date <- format(air_max_mean$datetime, format="%d/%m/%Y")
+air_max_mean$date<-as.factor(air_max_mean$date)
+
+write.csv(air_max_mean, "Daily max air temp.csv")
+``` 
+
+#Total (sum) daily precipitation RNCEP
+```{r precipitation}
+
+precip <- NCEP.gather(variable = 'prate.sfc', level = 'gaussian', months.minmax = c(6, 10), years.minmax = c(1995,2020), lat.southnorth = c(42.50, 45.40), lon.westeast = c(-81.65, -75.69), return.units = TRUE)
+
+precip_sum<- NCEP.aggregate(wx.data=precip, HOURS=FALSE, fxn='sum')
+
+precip_sum <- NCEP.array2df(precip_sum, var.names=NULL)
+
+precip_sum <- precip_sum %>%
+         mutate(precip_tot = variable1,
+         longitude = longitude - 360,  
+         datetime = ymd(gsub("[_XX]", "", datetime))) %>%
+         select( -variable1) %>% 
+         group_by(datetime) %>%
+         dplyr::summarize(precip_sum=mean(precip_tot))
+
+precip_sum$date <- format(precip_sum$datetime, format="%d/%m/%Y")
+precip_sum$date<-as.factor(precip_sum$date)
+
+#save precipitation data
+write.csv(precip_sum,"Daily tot precip.csv")
+
+```
+
+```{r merge weather}
+
+cov<-merge(air_mean, air_max_mean, by=c("datetime", "date"))
+cov<-merge(cov, air_min_mean, by=c("datetime", "date"))
+cov<-merge(cov, precip_sum, by=c("datetime", "date"))
+
+```
+
+#Caculate growing degree days and daily temperature varaibility (difference between daily high and low)
+
+```{r GDD}
+cov<-cov %>% mutate(doy=yday(datetime))
+
+cov$gdd<-gdd(tmax=cov$air_max, tmin=cov$air_min, tbase=11, tbase_max = 33, type="D")
+
+cov<-cov %>% mutate(air_var=air_max-air_min)
+
+```
+
+
+```{r write weather}
+
+write.csv(cov, "Daily weather.csv")
+
+```
+

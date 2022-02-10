@@ -1,0 +1,159 @@
+---
+title: "00-Weather"
+author: "Danielle Ethier"
+date: "06/07/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r packages}
+
+require(RNCEP) #for accessing the weather data
+require(tidyverse) 
+require(lubridate)
+
+```
+
+
+## Weather data access
+
+Data come from the NCEP/NCAR Reanalysis (http://www.esrl.noaa.gov/psd/data/gridded/data.ncep.reanalysis.html) 
+and NCEP/DOE Reanalysis II (http://www.esrl.noaa.gov/psd/data/gridded/data.ncep.reanalysis2.html) datasets. 
+
+Note that variables on a T62 Gaussian grid are evenly spaced in longitude but unevenly spaced in latitude. All data are downloaded on the gaussian grid for compariative purposes. 
+  
+Date range 1995-2020
+Month range July-October (7,10)
+Lat Long coordinates cover the Great Lakes Shoreline associated with MOBU counts from Long Point and surrounding area
+
+Zipf 2017: Total Monthly Precipitation, Average Monthly Temperature. 
+
+Bounding box: northeast Ottawa to tip of the Bruce in the northwest, down to LPBO in the south 
+
+#Air temp monthly average RNCEP
+```{r temp}
+
+#Import saved summary data
+#air_temp_summary<-read.csv("Mean.Monthly.Temp.csv")
+
+air_temp <- NCEP.gather(variable = 'air.2m', level = 'gaussian', months.minmax = c(6, 10), years.minmax = c(1995,2020), lat.southnorth = c(42.50, 45.40), lon.westeast = c(-81.65, -75.69), return.units = TRUE)
+
+#Calculate the mean air temperature on a given day. 
+air_temp_mean <- NCEP.aggregate(wx.data=air_temp, HOURS=FALSE, fxn='mean')
+
+#Change data from an array into a dateframe
+air_temp_mean <- NCEP.array2df(air_temp_mean, var.names=NULL)
+
+#Change temperature into degree C and create year, month, day columns
+air_temp_summary <- air_temp_mean %>%
+         mutate(air_temp_mean = variable1 - 273,
+         longitude = longitude - 360,  
+         datetime = ymd(gsub("[_XX]", "", datetime)),
+         year = year(datetime),
+         month = month(datetime),
+         day = mday(datetime),
+         month_year = paste(year,month)) %>%
+         select(-datetime, -variable1) %>%
+         group_by(month_year) %>%
+         dplyr::summarize(air_temp_mean=mean(air_temp_mean)) %>%
+	       separate(month_year, into=c("Year", "month"), sep=" ") %>%
+         pivot_wider(names_from = month, values_from = air_temp_mean) %>%
+         rename(June_temp = "6", July_temp = "7", August_temp = "8", September_temp = "9", October_temp = "10") %>%
+         mutate(Year=as.numeric(Year)) %>% 
+         mutate (Summer_temp = rowMeans(select(., 3:5))) #average summer temp June-Aug
+
+air_temp_summary_vis <- air_temp_mean %>%
+         mutate(air_temp_mean = variable1 - 273,
+         longitude = longitude - 360,  
+         datetime = ymd(gsub("[_XX]", "", datetime)),
+         year = year(datetime),
+         month = month(datetime),
+         day = mday(datetime),
+         month_year = paste(year,month)) %>%
+         select(-datetime, -variable1) %>%
+         group_by(month_year) %>%
+         dplyr::summarize(air_temp_mean=mean(air_temp_mean)) %>%
+	 separate(month_year, into=c("year", "month"), sep=" ") %>%
+         mutate(year = as.numeric(year), month = as.numeric(month))
+
+ggplot(air_temp_summary_vis, aes(x=year, y=air_temp_mean)) +
+  geom_point() +
+  geom_smooth() +
+  theme_classic() +
+  facet_wrap(month ~., scales="free")
+
+#save temperature data
+write.csv(air_temp_summary,"Mean.Monthly.Temp.csv")
+air_temp_summary<-read.csv("Mean.Monthly.Temp.csv")
+
+```  
+
+
+#Total (sum) monthly precipitation RNCEP
+```{r precipitation}
+
+#Import saved summary data
+#precip_summary<-read.csv("Sum.Monthly.Precip.csv")
+
+precip <- NCEP.gather(variable = 'prate.sfc', level = 'gaussian', months.minmax = c(6, 10), years.minmax = c(1995,2020), lat.southnorth = c(42.50, 45.40), lon.westeast = c(-81.65, -75.69), return.units = TRUE)
+
+precip_sum<- NCEP.aggregate(wx.data=precip, HOURS=FALSE, fxn='sum')
+
+precip_sum <- NCEP.array2df(precip_sum, var.names=NULL)
+
+precip_summary <- precip_sum %>%
+         mutate(precip_mean = variable1,
+         longitude = longitude - 360,  
+         datetime = ymd(gsub("[_XX]", "", datetime)),
+         year = year(datetime),
+         month = month(datetime),
+         day = mday(datetime),
+         month_year = paste(year,month)) %>%
+         select(-datetime, -variable1) %>%
+         group_by(month_year) %>%
+         dplyr::summarize(precip_mean=mean(precip_mean)) %>%
+	 separate(month_year, into=c("Year", "month"), sep=" ") %>%
+         pivot_wider(names_from = month, values_from = precip_mean) %>%
+         rename(June_precip = "6", July_precip = "7", August_precip = "8", September_precip = "9", October_precip = "10") %>%
+         mutate(Year = as.numeric(Year)) %>% 
+         mutate (Summer_precip = rowMeans(select(., 3:5))) #average summer precip June-Aug
+
+precip_summary_vis <- precip_sum %>%
+         mutate(precip_mean = variable1,
+         longitude = longitude - 360,  
+         datetime = ymd(gsub("[_XX]", "", datetime)),
+         year = year(datetime),
+         month = month(datetime),
+         day = mday(datetime),
+         month_year = paste(year,month)) %>%
+         select(-datetime, -variable1) %>%
+         group_by(month_year) %>%
+         dplyr::summarize(precip_mean=mean(precip_mean)) %>%
+	 separate(month_year, into=c("year", "month"), sep=" ") %>%
+         mutate(year = as.numeric(year), month = as.numeric(month))
+
+
+ggplot(precip_summary_vis, aes(x=year, y=precip_mean)) +
+  geom_point() +
+  geom_smooth() +
+  theme_classic() +
+  facet_wrap(month ~., scales="free")
+
+
+#save precipitation data
+write.csv(precip_summary,"Sum.Monthly.Precip.csv")
+precip_summary <-read.csv("Sum.Monthly.Precip.csv")
+```
+
+
+##Combine weather covariates into one table
+
+```{r combine weather}
+
+cov<-merge(air_temp_summary, precip_summary, by=c("Year"))
+
+```

@@ -1,0 +1,138 @@
+---
+title: "03-SupplementalAnalysis"
+author: "Danielle Ethier"
+date: "09/07/2021"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Install required packages
+
+```{r installPackages}
+
+require(tidyverse)  
+require(psych)
+require(mgcv)
+require(lmtest)
+require(RNCEP)
+
+detach("package:plyr", unload=TRUE) #if this was previously loaded it will cause a headache. 
+ 
+```
+
+##Import data and select desired covariates
+
+```{r import data}
+
+dat<-read.csv("Monarch.data.2021.csv")
+
+dat<-dat %>% select(survey_year, June_temp, July_temp, August_temp, September_temp, October_temp, Summer_temp, Summer_temp, June_precip, July_precip, August_precip, September_precip, October_precip, Summer_precip)
+
+```
+
+#Model Weather with Time (year)
+
+Look to see if there has been a significant linear change in weather over time. Hint: there is no diserable pattern in any of our weather covariates. 
+
+```{r weather model}
+
+JuneT<-lm(June_temp~survey_year, data=dat)
+summary(JuneT)
+
+JulyT<-lm(July_temp~survey_year, data=dat)
+summary(JulyT)
+
+AugT<-lm(August_temp~survey_year, data=dat)
+summary(AugT)
+
+SeptT<-lm(September_temp~survey_year, data=dat)
+summary(SeptT)
+
+OctT<-lm(October_temp~survey_year, data=dat)
+summary(OctT)
+
+JuneP<-lm(June_precip~survey_year, data=dat)
+summary(JuneP)
+
+JulyP<-lm(July_precip~survey_year, data=dat)
+summary(JulyP)
+
+AugP<-lm(August_precip~survey_year, data=dat)
+summary(AugP)
+
+ggplot(dat, aes (x=survey_year, y=August_precip)) +
+  geom_point() +
+  geom_smooth(method ="lm") + 
+  xlab("Survey Year") +
+  ylab("August Precipitation") +
+  theme_classic()
+
+SeptP<-lm(September_precip~survey_year, data=dat)
+summary(SeptP)
+
+OctP<-lm(October_precip~survey_year, data=dat)
+summary(OctP)
+
+```
+
+
+#Spatial autocorrelation of environmental covariates
+
+Look to see if there is significant spatail autocorrelation in our weather covarites over the spatail scale of the analysis. 
+
+```{r spatial autocorrelation}
+
+air_temp <- NCEP.gather(variable = 'air.2m', level = 'gaussian', months.minmax = c(6, 10), years.minmax = c(1995,2020), lat.southnorth = c(42.50, 45.40), lon.westeast = c(-81.65, -75.69), return.units = TRUE)
+
+#Calculate the mean air temperature on a given day. 
+air_temp_mean <- NCEP.aggregate(wx.data=air_temp, HOURS=FALSE, fxn='mean')
+
+#Change data from an array into a dateframe
+air_temp_mean <- NCEP.array2df(air_temp_mean, var.names=NULL)
+
+#Change temperature into degree C and create year, month, day columns
+air_temp_summary <- air_temp_mean %>%
+         mutate(air_temp_mean = variable1 - 273,
+         longitude = longitude - 360,  
+         datetime = ymd(gsub("[_XX]", "", datetime)),
+         year = year(datetime),
+         month = month(datetime),
+         day = mday(datetime),
+         month_year = paste(year,month)) %>%
+         select(-datetime, -variable1)%>%
+         group_by(month_year, latitude, longitude) %>%
+         dplyr::summarize(air_temp_mean=mean(air_temp_mean)) %>%
+	       separate(month_year, into=c("Year", "month"), sep=" ") %>%
+         pivot_wider(names_from = month, values_from = air_temp_mean) %>%
+         rename(June_temp = "6", July_temp = "7", August_temp = "8", September_temp = "9", October_temp = "10") %>%
+         mutate(Year=as.numeric(Year))
+
+air_temp_summary_vis <- air_temp_mean %>%
+         mutate(air_temp_mean = variable1 - 273,
+         longitude = longitude - 360,  
+         datetime = ymd(gsub("[_XX]", "", datetime)),
+         year = year(datetime),
+         month = month(datetime),
+         day = mday(datetime),
+         month_year = paste(year,month)) %>%
+         select(-datetime, -variable1) %>%
+         group_by(month_year, latitude, longitude) %>%
+         dplyr::summarize(air_temp_mean=mean(air_temp_mean)) %>%
+	 separate(month_year, into=c("year", "month"), sep=" ") %>%
+         mutate(year = as.numeric(year), month = as.numeric(month))
+
+ggplot(air_temp_summary_vis, aes(x=year, y=air_temp_mean)) +
+  geom_point() +
+  geom_smooth() +
+  theme_classic() +
+  facet_wrap(month ~., scales="free")
+
+
+
+
+```
